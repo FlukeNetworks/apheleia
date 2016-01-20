@@ -1,0 +1,13 @@
+name: chronos
+patterns:
+  executor: chronos\..+
+  task: chronos
+port_index: 0
+service_port: 31004
+checks_interval: 2
+checks:
+  - type: http
+    uri: /
+    timeout: 0.2
+    rise: 3
+    fall: 2
