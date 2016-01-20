@@ -71,7 +71,7 @@ func filesDiffer(first, second string) (bool, error) {
 	return (firstSum != secondSum), nil
 }
 
-func configureNerve(zkHosts []string, zkPath, slave, slaveHost, nerveCfg *string, _ []string) {
+func configureNerve(zkHosts []string, zkPath, slave, nerveCfg *string, _ []string) {
 	slaveState, err := getSlaveState(*slave)
 	if err != nil {
 		log.Fatal(err)
@@ -100,13 +100,13 @@ func configureNerve(zkHosts []string, zkPath, slave, slaveHost, nerveCfg *string
 			log.Fatal(err)
 		}
 		for _, task := range matchingTasks {
-			nsvc := createNerveService(svc, task, zkHosts, *zkPath, *slaveHost)
+			nsvc := createNerveService(svc, task, zkHosts, *zkPath, slaveState.Hostname)
 			nerveServices = append(nerveServices, nsvc)
 		}
 	}
 
 	nerveConfig := nerve.Config{
-		InstanceId: *slaveHost,
+		InstanceId: slaveState.Id,
 		Services: nerveServices,
 	}
 
@@ -147,7 +147,7 @@ func configureNerve(zkHosts []string, zkPath, slave, slaveHost, nerveCfg *string
 	}
 }
 
-func updateZk(zkHosts []string, zkPath, slave, _, _ *string, serviceFiles []string) {
+func updateZk(zkHosts []string, zkPath, slave, _ *string, serviceFiles []string) {
 	services := make([]Service, 0)
 	for _, serviceFile := range serviceFiles {
 		fileBytes, err := ioutil.ReadFile(serviceFile)
@@ -195,7 +195,6 @@ func main() {
 	zkArg := flag.String("zk", "", "zookeeper hosts string")
 	zkPath := flag.String("zkPath", "/apheleia", "zookeeper path for this service keyspace")
 	slave := flag.String("slave", "http://localhost:5051", "base URI for mesos slave API")
-	slaveHost := flag.String("slaveHost", "localhost", "hostname for slave when registering services")
 	nerveCfg := flag.String("nerveCfg", "nerve.conf.json", "output location for nerve config")
 	flag.Parse()
 	zkHosts := strings.Split(*zkArg, ",")
@@ -209,9 +208,9 @@ func main() {
 
 	switch command {
 	case "configureNerve":
-		configureNerve(zkHosts, zkPath, slave, slaveHost, nerveCfg, commandArgs)
+		configureNerve(zkHosts, zkPath, slave, nerveCfg, commandArgs)
 	case "updateZk":
-		updateZk(zkHosts, zkPath, slave, slaveHost, nerveCfg, commandArgs)
+		updateZk(zkHosts, zkPath, slave, nerveCfg, commandArgs)
 	default:
 		log.Fatal(fmt.Errorf("Unknown command: %s", command))
 	}

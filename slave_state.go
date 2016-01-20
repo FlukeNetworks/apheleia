@@ -9,6 +9,8 @@ import (
 )
 
 type slaveState struct {
+	Id string `json:"id"`
+	Hostname string `json:"hostname"`
 	Frameworks []frameworkState `json:"frameworks"`
 }
 
