@@ -1,5 +1,10 @@
 package main
 
+import (
+	"github.com/FlukeNetworks/apheleia/nerve"
+	"github.com/FlukeNetworks/apheleia/synapse"
+)
+
 type ApheleiaNode struct {
 	Services []Service `json:"services"`
 }
@@ -7,10 +12,14 @@ type ApheleiaNode struct {
 type Service struct {
 	Name string `json:"name"`
 	Patterns ServicePatterns `json:"patterns"`
-	PortIndex int `json:"port_index"`
-	ServicePort int `json:"service_port"`
-	CheckInterval int `json:"check_interval"`
-	Checks []map[string]interface{} `json:"checks"`
+	PortIndex int `json:"port_index" yaml:"port_index"`
+	ServicePort int `json:"service_port" yaml:"service_port"`
+	Nerve nerve.Service `json:"nerve"`
+	Synapse synapse.Service `json:"synapse"`
+}
+
+func (s *Service) GetNodePath() string {
+	return "/" + s.Name
 }
 
 type ServicePatterns struct {

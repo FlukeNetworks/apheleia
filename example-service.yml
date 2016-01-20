@@ -4,10 +4,17 @@ patterns:
   task: chronos
 port_index: 0
 service_port: 31004
-check_interval: 2
-checks:
-  - type: http
-    uri: /
-    timeout: 0.2
-    rise: 3
-    fall: 2
+nerve:
+  check_interval: 2
+  checks:
+    - type: http
+      uri: /
+      timeout: 0.2
+      rise: 3
+      fall: 2
+synapse:
+  haproxy:
+    server_options: check inter 2s rise 3 fall 2
+    listen:
+      - mode http
+      - option httpchk /

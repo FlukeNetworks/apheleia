@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/FlukeNetworks/apheleia/nerve"
+	"github.com/FlukeNetworks/apheleia/synapse"
 	"github.com/samuel/go-zookeeper/zk"
 	yaml "gopkg.in/yaml.v2"
 	"io"
@@ -20,15 +21,30 @@ import (
 
 const ChecksumSize = md5.Size
 
+func createSynapseService(svc Service, zkHosts []string, zkPath string) synapse.Service {
+	ssvc := svc.Synapse
+	if len(ssvc.DefaultServers) < 1 {
+		ssvc.DefaultServers = []synapse.Server{}
+	}
+	ssvc.Discovery = synapse.Discovery{
+		Method: "zookeeper",
+		Path: zkPath + svc.GetNodePath(),
+		Hosts: zkHosts,
+	}
+	log.Printf("Setting synapse service port to %d\n", svc.ServicePort)
+	ssvc.HAProxy.Port = svc.ServicePort
+	return ssvc
+}
+
 func createNerveService(svc Service, task taskState, zkHosts []string, zkPath, slaveHost string) nerve.Service {
 	return nerve.Service{
 		Host: slaveHost,
 		Port: task.getPort(svc.PortIndex),
 		ReporterType: "zookeeper",
 		ZkHosts: zkHosts,
-		ZkPath: zkPath + "/" + svc.Name,
-		CheckInterval: svc.CheckInterval,
-		Checks: svc.Checks,
+		ZkPath: zkPath + svc.GetNodePath(),
+		CheckInterval: svc.Nerve.CheckInterval,
+		Checks: svc.Nerve.Checks,
 	}
 }
 
@@ -71,7 +87,22 @@ func filesDiffer(first, second string) (bool, error) {
 	return (firstSum != secondSum), nil
 }
 
-func configureNerve(zkHosts []string, zkPath, slave, nerveCfg *string, _ []string) {
+func writeJsonFile(file string, data interface{}) error {
+	outputFile, err := os.Create(file)
+	if err != nil {
+		return err
+	}
+
+	encoder := json.NewEncoder(outputFile)
+	if err = encoder.Encode(data); err != nil {
+		outputFile.Close()
+		return err
+	}
+
+	return outputFile.Close()
+}
+
+func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *string, _ []string) {
 	slaveState, err := getSlaveState(*slave)
 	if err != nil {
 		log.Fatal(err)
@@ -110,44 +141,82 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg *string, _ []strin
 		Services: nerveServices,
 	}
 
+	synapseServices := make(map[string]synapse.Service)
+	for _, svc := range node.Services {
+		synapseServices[svc.Name] = createSynapseService(svc, zkHosts, *zkPath)
+	}
+
+	// Read in the old synapse config
+	synapseConfig := func() synapse.Config {
+		synapseConfigFile, err := os.Open(*synapseCfg)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer synapseConfigFile.Close()
+
+		var synapseConfig synapse.Config
+		decoder := json.NewDecoder(synapseConfigFile)
+		if err := decoder.Decode(&synapseConfig); err != nil {
+			log.Fatal(err)
+		}
+		return synapseConfig
+	}()
+	synapseConfig["services"] = synapseServices
+
 	// Copy the current config to a .old file
 	oldNerveCfg := *nerveCfg + ".old"
 	if err := copyFile(oldNerveCfg, *nerveCfg); err != nil {
 		log.Fatal(err)
 	}
+	oldSynapseCfg := *synapseCfg + ".old"
+	if err := copyFile(oldSynapseCfg, *synapseCfg); err != nil {
+		log.Fatal(err)
+	}
 
-	// Write the new nerve config
-	func() {
-		outputFile, err := os.Create(*nerveCfg)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer outputFile.Close()
+	// Write the new config
+	if err := writeJsonFile(*nerveCfg, &nerveConfig); err != nil {
+		log.Fatal(err)
+	}
+	if err := writeJsonFile(*synapseCfg, synapseConfig); err != nil {
+		log.Fatal(err)
+	}
 
-		encoder := json.NewEncoder(outputFile)
-		if err = encoder.Encode(&nerveConfig); err != nil {
-			log.Fatal(err)
-		}
-	}()
-
-	// If the files differ, we need to restart nerve
+	// If the nerve files differ, we need to restart nerve
 	shouldRestart, err := filesDiffer(*nerveCfg, oldNerveCfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 	if shouldRestart {
-		nerveRestartCommand := os.Getenv("APHELEIA_NERVE_RESTART_CMD")
-		cmd := exec.Command("bash", "-c", nerveRestartCommand)
-		if err := cmd.Start(); err != nil {
+		if err := performRestart("NERVE"); err != nil {
 			log.Fatal(err)
 		}
-		if err := cmd.Wait(); err != nil {
+	}
+
+	// If the synapse files differ, we need to restart synapse
+	shouldRestart, err = filesDiffer(*synapseCfg, oldSynapseCfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if shouldRestart {
+		if err := performRestart("SYNAPSE"); err != nil {
 			log.Fatal(err)
 		}
 	}
 }
 
-func updateZk(zkHosts []string, zkPath, slave, _ *string, serviceFiles []string) {
+func performRestart(serviceName string) error {
+	restartCommand := os.Getenv(fmt.Sprintf("APHELEIA_%s_RESTART_CMD", serviceName))
+	cmd := exec.Command("bash", "-c", restartCommand)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := cmd.Wait(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func updateZk(zkHosts []string, zkPath, slave, _, _ *string, serviceFiles []string) {
 	services := make([]Service, 0)
 	for _, serviceFile := range serviceFiles {
 		fileBytes, err := ioutil.ReadFile(serviceFile)
@@ -159,6 +228,7 @@ func updateZk(zkHosts []string, zkPath, slave, _ *string, serviceFiles []string)
 		if err = yaml.Unmarshal(fileBytes, &svc); err != nil {
 			log.Fatal(err)
 		}
+		log.Printf("%s should be running on %d\n", svc.Name, svc.ServicePort)
 		services = append(services, svc)
 	}
 
@@ -196,6 +266,7 @@ func main() {
 	zkPath := flag.String("zkPath", "/apheleia", "zookeeper path for this service keyspace")
 	slave := flag.String("slave", "http://localhost:5051", "base URI for mesos slave API")
 	nerveCfg := flag.String("nerveCfg", "nerve.conf.json", "output location for nerve config")
+	synapseCfg := flag.String("synapseCfg", "synapse.conf.json", "output location for synapse config")
 	flag.Parse()
 	zkHosts := strings.Split(*zkArg, ",")
 
@@ -208,9 +279,9 @@ func main() {
 
 	switch command {
 	case "configureNerve":
-		configureNerve(zkHosts, zkPath, slave, nerveCfg, commandArgs)
+		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, commandArgs)
 	case "updateZk":
-		updateZk(zkHosts, zkPath, slave, nerveCfg, commandArgs)
+		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, commandArgs)
 	default:
 		log.Fatal(fmt.Errorf("Unknown command: %s", command))
 	}
