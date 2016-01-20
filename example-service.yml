@@ -4,7 +4,7 @@ patterns:
   task: chronos
 port_index: 0
 service_port: 31004
-checks_interval: 2
+check_interval: 2
 checks:
   - type: http
     uri: /
