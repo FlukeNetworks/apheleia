@@ -3,7 +3,11 @@
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://github.com/FlukeNetworks/apheleia/blob/master/LICENSE)
 [![Stories in Ready](https://badge.waffle.io/FlukeNetworks/apheleia.svg?label=ready&title=ready)](http://waffle.io/FlukeNetworks/apheleia)
 
-`apheleia` is a reconfiguration utility for [nerve](https://github.com/airbnb/nerve) similar to Yelp's [nerve-tools](https://github.com/Yelp/nerve-tools) `configure_nerve`, but with its data based in zookeeper and not on disk.
+`apheleia` is a reconfiguration utility for [nerve](https://github.com/airbnb/nerve) similar to Yelp's [nerve-tools](https://github.com/Yelp/nerve-tools) `configure_nerve`, but with its data based in zookeeper and not on disk. The zookeeper data can be updated from YAML configuration files via the `apheleia` CLI tool. This is to reduce the unneeded complexity introduced by having to keep local files of the configuration around on every machine. Since zookeeper already contains critical data in most mesos deployments, there is little reason to not use it as storage for service declarations as well.
+
+# Justification
+
+Yelp's [nerve-tools `configure_nerve`](https://github.com/Yelp/nerve-tools) works well for exposing *Marathon* services, but breaks down when you want to expose mesos tasks in a more generalized manner. Apheleia will be able to select tasks to expose from the mesos slave API via simple regex filters, rather than having to look explicitly for marathon services. This means that your service discovery mechanism is not so closely tied to the mesos framework that you choose, though it will require slightly more configuration on a per-service basis.
 
 # Usage
 
