@@ -136,7 +136,7 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg *string, _ []strin
 		log.Fatal(err)
 	}
 	if shouldRestart {
-		nerveRestartCommand := os.Getenv("NERVE_RESTART_CMD")
+		nerveRestartCommand := os.Getenv("APHELEIA_NERVE_RESTART_CMD")
 		cmd := exec.Command("bash", "-c", nerveRestartCommand)
 		if err := cmd.Start(); err != nil {
 			log.Fatal(err)
