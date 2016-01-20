@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -8,12 +9,16 @@ import (
 	"github.com/FlukeNetworks/apheleia/nerve"
 	"github.com/samuel/go-zookeeper/zk"
 	yaml "gopkg.in/yaml.v2"
+	"io"
 	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 )
+
+const ChecksumSize = md5.Size
 
 func createNerveService(svc Service, task taskState, zkHosts []string, zkPath, slaveHost string) nerve.Service {
 	return nerve.Service{
@@ -25,6 +30,45 @@ func createNerveService(svc Service, task taskState, zkHosts []string, zkPath, s
 		CheckInterval: svc.CheckInterval,
 		Checks: svc.Checks,
 	}
+}
+
+func copyFile(dst, src string) error {
+	s, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	d, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(d, s); err != nil {
+		d.Close()
+		return err
+	}
+
+	return d.Close()
+}
+
+func fileChecksum(filename string) ([ChecksumSize]byte, error) {
+	fileBytes, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return [ChecksumSize]byte{}, err
+	}
+	return md5.Sum(fileBytes), nil
+}
+
+func filesDiffer(first, second string) (bool, error) {
+	firstSum, err := fileChecksum(first)
+	if err != nil {
+		return false, err
+	}
+	secondSum, err := fileChecksum(second)
+	if err != nil {
+		return false, err
+	}
+	return (firstSum != secondSum), nil
 }
 
 func configureNerve(zkHosts []string, zkPath, slave, slaveHost, nerveCfg *string, _ []string) {
@@ -66,15 +110,40 @@ func configureNerve(zkHosts []string, zkPath, slave, slaveHost, nerveCfg *string
 		Services: nerveServices,
 	}
 
-	outputFile, err := os.Create(*nerveCfg)
+	// Copy the current config to a .old file
+	oldNerveCfg := *nerveCfg + ".old"
+	if err := copyFile(oldNerveCfg, *nerveCfg); err != nil {
+		log.Fatal(err)
+	}
+
+	// Write the new nerve config
+	func() {
+		outputFile, err := os.Create(*nerveCfg)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer outputFile.Close()
+
+		encoder := json.NewEncoder(outputFile)
+		if err = encoder.Encode(&nerveConfig); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// If the files differ, we need to restart nerve
+	shouldRestart, err := filesDiffer(*nerveCfg, oldNerveCfg)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer outputFile.Close()
-
-	encoder := json.NewEncoder(outputFile)
-	if err = encoder.Encode(&nerveConfig); err != nil {
-		log.Fatal(err)
+	if shouldRestart {
+		nerveRestartCommand := os.Getenv("NERVE_RESTART_CMD")
+		cmd := exec.Command("bash", "-c", nerveRestartCommand)
+		if err := cmd.Start(); err != nil {
+			log.Fatal(err)
+		}
+		if err := cmd.Wait(); err != nil {
+			log.Fatal(err)
+		}
 	}
 }
 
