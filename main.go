@@ -6,6 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/defaults"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/FlukeNetworks/apheleia/nerve"
 	"github.com/FlukeNetworks/apheleia/synapse"
 	"github.com/samuel/go-zookeeper/zk"
@@ -102,7 +106,74 @@ func writeJsonFile(file string, data interface{}) error {
 	return outputFile.Close()
 }
 
-func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *string, public *bool, _ []string) {
+func getAWSConfig() *aws.Config {
+	awsConfig := defaults.Get().Config
+	awsConfig.Region = aws.String(os.Getenv("AWS_DEFAULT_REGION"))
+
+	return awsConfig
+}
+
+func downloadConfiguration(configFile, configBucket string) {
+	// If the user didn't supply a configBucket, then we don't need to download
+	if len(configBucket) < 1 {
+		return
+	}
+
+	log.Printf("Downloading configuration: %s\n", configFile)
+
+	awsConfig := getAWSConfig()
+	sss := s3.New(session.New(awsConfig))
+	obj, err := sss.GetObject(&s3.GetObjectInput{
+		Bucket: aws.String(configBucket),
+		Key: aws.String(configFile),
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer obj.Body.Close()
+
+	outFile, err := os.Create(configFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if _, err := io.Copy(outFile, obj.Body); err != nil {
+		outFile.Close()
+		log.Fatal(err)
+	}
+
+	if err := outFile.Close(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func uploadConfiguration(configFile, configBucket string) {
+	if len(configBucket) < 1 {
+		return
+	}
+
+	log.Printf("Uploading configuration: %s\n", configFile)
+
+	awsConfig := getAWSConfig()
+	sss := s3.New(session.New(awsConfig))
+
+	inFile, err := os.Open(configFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer inFile.Close()
+
+	_, err = sss.PutObject(&s3.PutObjectInput{
+		Bucket: aws.String(configBucket),
+		Key: aws.String(configFile),
+		Body: inFile,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg, configBucket *string, public *bool, _ []string) {
 	slaveState, err := getSlaveState(*slave)
 	if err != nil {
 		log.Fatal(err)
@@ -165,6 +236,9 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *strin
 	}()
 	synapseConfig["services"] = synapseServices
 
+	downloadConfiguration(*nerveCfg, *configBucket)
+	downloadConfiguration(*synapseCfg, *configBucket)
+
 	// Copy the current config to a .old file
 	oldNerveCfg := *nerveCfg + ".old"
 	if err := copyFile(oldNerveCfg, *nerveCfg); err != nil {
@@ -204,6 +278,9 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *strin
 			log.Fatal(err)
 		}
 	}
+
+	uploadConfiguration(*nerveCfg, *configBucket)
+	uploadConfiguration(*synapseCfg, *configBucket)
 }
 
 func performRestart(serviceName string) error {
@@ -218,7 +295,7 @@ func performRestart(serviceName string) error {
 	return nil
 }
 
-func updateZk(zkHosts []string, zkPath, slave, _, _ *string, _ *bool, serviceFiles []string) {
+func updateZk(zkHosts []string, zkPath, slave, _, _, _ *string, _ *bool, serviceFiles []string) {
 	services := make([]Service, 0)
 	for _, serviceFile := range serviceFiles {
 		fileBytes, err := ioutil.ReadFile(serviceFile)
@@ -270,6 +347,7 @@ func main() {
 	nerveCfg := flag.String("nerveCfg", "nerve.conf.json", "output location for nerve config")
 	synapseCfg := flag.String("synapseCfg", "synapse.conf.json", "output location for synapse config")
 	public := flag.Bool("public", false, "only generate nerve configuration for public services")
+	configBucket := flag.String("s3", "", "S3 bucket to which to upload generated configuration")
 	flag.Parse()
 	zkHosts := strings.Split(*zkArg, ",")
 
@@ -282,9 +360,9 @@ func main() {
 
 	switch command {
 	case "configureNerve":
-		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, public, commandArgs)
+		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, public, commandArgs)
 	case "updateZk":
-		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, public, commandArgs)
+		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, public, commandArgs)
 	default:
 		log.Fatal(fmt.Errorf("Unknown command: %s", command))
 	}
