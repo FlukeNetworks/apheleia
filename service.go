@@ -11,6 +11,7 @@ type ApheleiaNode struct {
 
 type Service struct {
 	Name string `json:"name"`
+	Public bool `json:"public"`
 	Patterns ServicePatterns `json:"patterns"`
 	PortIndex int `json:"port_index" yaml:"port_index"`
 	ServicePort int `json:"service_port" yaml:"service_port"`

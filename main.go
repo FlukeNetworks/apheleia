@@ -102,7 +102,7 @@ func writeJsonFile(file string, data interface{}) error {
 	return outputFile.Close()
 }
 
-func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *string, _ []string) {
+func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *string, public *bool, _ []string) {
 	slaveState, err := getSlaveState(*slave)
 	if err != nil {
 		log.Fatal(err)
@@ -143,7 +143,9 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *strin
 
 	synapseServices := make(map[string]synapse.Service)
 	for _, svc := range node.Services {
-		synapseServices[svc.Name] = createSynapseService(svc, zkHosts, *zkPath)
+		if !(*public) || svc.Public {
+			synapseServices[svc.Name] = createSynapseService(svc, zkHosts, *zkPath)
+		}
 	}
 
 	// Read in the old synapse config
@@ -216,7 +218,7 @@ func performRestart(serviceName string) error {
 	return nil
 }
 
-func updateZk(zkHosts []string, zkPath, slave, _, _ *string, serviceFiles []string) {
+func updateZk(zkHosts []string, zkPath, slave, _, _ *string, _ *bool, serviceFiles []string) {
 	services := make([]Service, 0)
 	for _, serviceFile := range serviceFiles {
 		fileBytes, err := ioutil.ReadFile(serviceFile)
@@ -267,6 +269,7 @@ func main() {
 	slave := flag.String("slave", "http://localhost:5051", "base URI for mesos slave API")
 	nerveCfg := flag.String("nerveCfg", "nerve.conf.json", "output location for nerve config")
 	synapseCfg := flag.String("synapseCfg", "synapse.conf.json", "output location for synapse config")
+	public := flag.Bool("public", false, "only generate nerve configuration for public services")
 	flag.Parse()
 	zkHosts := strings.Split(*zkArg, ",")
 
@@ -279,9 +282,9 @@ func main() {
 
 	switch command {
 	case "configureNerve":
-		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, commandArgs)
+		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, public, commandArgs)
 	case "updateZk":
-		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, commandArgs)
+		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, public, commandArgs)
 	default:
 		log.Fatal(fmt.Errorf("Unknown command: %s", command))
 	}
