@@ -124,7 +124,7 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *strin
 		log.Fatal(err)
 	}
 
-	nerveServices := make([]nerve.Service, 0)
+	nerveServices := make(map[string]nerve.Service)
 	for _, svc := range node.Services {
 		matchingTasks, err := slaveState.getMatchingTasks(svc.Patterns)
 		if err != nil {
@@ -132,7 +132,7 @@ func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg *strin
 		}
 		for _, task := range matchingTasks {
 			nsvc := createNerveService(svc, task, zkHosts, *zkPath, slaveState.Hostname)
-			nerveServices = append(nerveServices, nsvc)
+			nerveServices[svc.Name] = nsvc
 		}
 	}
 

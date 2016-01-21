@@ -2,7 +2,7 @@ package nerve
 
 type Config struct {
 	InstanceId string `json:"instance_id" yaml"instance_id"`
-	Services []Service `json:"services"`
+	Services map[string]Service `json:"services"`
 }
 
 type Service struct {
