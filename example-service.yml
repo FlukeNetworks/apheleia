@@ -1,4 +1,5 @@
 name: chronos
+public: false
 patterns:
   executor: chronos\..+
   task: chronos
