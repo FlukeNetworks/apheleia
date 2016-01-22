@@ -173,7 +173,7 @@ func uploadConfiguration(configFile, configBucket string) {
 	}
 }
 
-func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg, configBucket *string, public *bool, _ []string) {
+func configureNerve(zkHosts []string, zkPath, slave, nerveCfg, synapseCfg, configBucket, _ *string, public *bool, _ []string) {
 	slaveState, err := getSlaveState(*slave)
 	if err != nil {
 		log.Fatal(err)
@@ -295,7 +295,7 @@ func performRestart(serviceName string) error {
 	return nil
 }
 
-func updateZk(zkHosts []string, zkPath, slave, _, _, _ *string, _ *bool, serviceFiles []string) {
+func updateZk(zkHosts []string, zkPath, slave, _, _, _, _ *string, _ *bool, serviceFiles []string) {
 	services := make([]Service, 0)
 	for _, serviceFile := range serviceFiles {
 		fileBytes, err := ioutil.ReadFile(serviceFile)
@@ -340,6 +340,79 @@ func updateZk(zkHosts []string, zkPath, slave, _, _, _ *string, _ *bool, service
 	}
 }
 
+func (srv *Service) writeHostlocalProxyConfig(w io.Writer) error {
+	// First write the configuration for the frontend
+	if _, err := fmt.Fprintf(w, "frontend %s\n    mode tcp\n    bind *:%d\n    default_backend %s\n", srv.Name, srv.ServicePort, srv.Name); err != nil {
+		return err
+	}
+
+	// Then write the configuration for the backend
+	if _, err := fmt.Fprintf(w, "backend %s\n    mode tcp\n    balance roundrobin\n    server %s-hostlocal 169.254.255.254:%d check\n", srv.Name, srv.Name, srv.ServicePort); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func configurePublic(zkHosts []string, zkPath, _, _, _, configBucket, publicCfg *string, public *bool, _ []string) {
+	downloadConfiguration(*publicCfg, *configBucket)
+
+	zkConn, _, err := zk.Connect(zkHosts, 10 * time.Minute)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer zkConn.Close()
+
+	// Copy file
+	publicCfgOld := *publicCfg + ".old"
+	if err := copyFile(publicCfgOld, *publicCfg); err != nil {
+		log.Fatal(err)
+	}
+
+	// Get the service information from Zookeeper
+	nodeBytes, _, err := zkConn.Get(*zkPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var node ApheleiaNode
+	if err = json.Unmarshal(nodeBytes, &node); err != nil {
+		log.Fatal(err)
+	}
+
+	// Write the new configuration file
+	writeConfig := func() error {
+		publicCfgFile, err := os.Create(*publicCfg)
+		if err != nil {
+			return err
+		}
+		defer publicCfgFile.Close()
+
+		for _, service := range node.Services {
+			if !(*public) || service.Public {
+				if err := service.writeHostlocalProxyConfig(publicCfgFile); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := writeConfig(); err != nil {
+		log.Fatal(err)
+	}
+
+	shouldRestart, err := filesDiffer(*publicCfg, publicCfgOld)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if shouldRestart {
+		uploadConfiguration(*publicCfg, *configBucket)
+
+		if err := performRestart("PUBLIC"); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
 func main() {
 	zkArg := flag.String("zk", "", "zookeeper hosts string")
 	zkPath := flag.String("zkPath", "/apheleia", "zookeeper path for this service keyspace")
@@ -348,6 +421,7 @@ func main() {
 	synapseCfg := flag.String("synapseCfg", "synapse.conf.json", "output location for synapse config")
 	public := flag.Bool("public", false, "only generate nerve configuration for public services")
 	configBucket := flag.String("s3", "", "S3 bucket to which to upload generated configuration")
+	publicCfg := flag.String("publicCfg", "haproxy.cfg", "public haproxy configuration file")
 	flag.Parse()
 	zkHosts := strings.Split(*zkArg, ",")
 
@@ -359,10 +433,12 @@ func main() {
 	commandArgs := freeArgs[1:]
 
 	switch command {
+	case "configurePublic":
+		configurePublic(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, publicCfg, public, commandArgs)
 	case "configureNerve":
-		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, public, commandArgs)
+		configureNerve(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, publicCfg, public, commandArgs)
 	case "updateZk":
-		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, public, commandArgs)
+		updateZk(zkHosts, zkPath, slave, nerveCfg, synapseCfg, configBucket, publicCfg, public, commandArgs)
 	default:
 		log.Fatal(fmt.Errorf("Unknown command: %s", command))
 	}
