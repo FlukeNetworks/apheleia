@@ -71,16 +71,32 @@ func (task *taskState) getPort(index int) int {
 	portsString := task.Resources["ports"].(string)
 	portsString = strings.Trim(portsString, "[]")
 
+	portCount := 0
 	portRangeStrs := strings.Split(portsString, ",")
 	portRanges := make([][]string, len(portRangeStrs))
 	for idx, portRangeStr := range portRangeStrs {
 		portRanges[idx] = strings.Split(portRangeStr, "-")
+		portCount += len(portRanges[idx])
 	}
 
-	i, err := strconv.Atoi(portRanges[index][0])
-	if err != nil {
-		panic("Invalid port from mesos")
+	allPorts := make([]int, portCount)
+	portCount = 0
+	for _, portRange := range portRanges {
+		lowerBound, err := strconv.Atoi(portRange[0])
+		if err != nil {
+			panic("Invalid port range from mesos (no lower bound)")
+		}
+
+		upperBound, err := strconv.Atoi(portRange[1])
+		if err != nil {
+			panic("Invalid port range from mesos (no upper bound)")
+		}
+
+		for idx := lowerBound; idx <= upperBound; idx++ {
+			allPorts[portCount] = idx
+			portCount++
+		}
 	}
 
-	return i
+	return allPorts[index]
 }
