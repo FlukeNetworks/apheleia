@@ -73,6 +73,9 @@ func (task *taskState) getPort(index int) int {
 
 	portCount := 0
 	portRangeStrs := strings.Split(portsString, ",")
+	for idx, portRangeStr := range portRangeStrs {
+		portRangeStrs[idx] = strings.Trim(portRangeStr, " ")
+	}
 	portRanges := make([][]string, len(portRangeStrs))
 	for idx, portRangeStr := range portRangeStrs {
 		portRanges[idx] = strings.Split(portRangeStr, "-")
